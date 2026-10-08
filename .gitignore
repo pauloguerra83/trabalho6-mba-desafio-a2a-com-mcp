@@ -4,3 +4,5 @@ __pycache__/
 node_modules/
 dist/
 *.log
+CONTEXTO.md
+enunciado.md
