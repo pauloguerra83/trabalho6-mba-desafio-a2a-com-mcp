@@ -135,6 +135,8 @@ def _retomar(ctx: Context) -> ReservaOut | InputRequiredResult:
 
     resposta = (ctx.input_responses or {}).get(CHAVE_DA_ESCOLHA)
     if resposta is None:
+        # Sem resposta a pergunta e refeita, e de novo so para quem declarou form mode.
+        _exigir_elicitation_form(ctx)
         return _pergunta(estado)
     acao = getattr(resposta, "action", None)
     if acao == "decline":
