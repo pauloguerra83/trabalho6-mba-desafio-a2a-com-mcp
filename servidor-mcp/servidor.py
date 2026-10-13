@@ -26,6 +26,7 @@ from mcp_types import (
 )
 
 from dominio import ERRO_SEM_ALTERNATIVA, CentralDeSalas, ErroDeRegra, Pedido
+from guarda_versao import GuardaDeVersao
 from log_requests import LogDeRequests
 from modelos import ConflitoOut, Disponibilidade, ListaDeSalas, ReservaOut, SalaOut, modelo_escolha
 
@@ -176,7 +177,8 @@ def politica_de_uso() -> str:
 def main() -> None:
     app = mcp.streamable_http_app(json_response=True, stateless_http=True, host=HOST)
     print(f"[mcp] central-de-salas em http://{HOST}:{PORTA}/mcp", file=sys.stderr, flush=True)
-    uvicorn.run(LogDeRequests(app), host=HOST, port=PORTA, log_level="warning")
+    # O log fica por fora, para registrar tambem o que a guarda de versao recusa.
+    uvicorn.run(LogDeRequests(GuardaDeVersao(app)), host=HOST, port=PORTA, log_level="warning")
 
 
 if __name__ == "__main__":
