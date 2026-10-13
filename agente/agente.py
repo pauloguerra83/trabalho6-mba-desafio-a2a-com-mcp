@@ -24,7 +24,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from cartao import agent_card
-from host_mcp import Concluido, Desfecho, Falhou, HostMcp, Pausado
+from host_mcp import Concluido, Desfecho, Falhou, HostMcp, McpIndisponivel, Pausado
 from pedido import RECUSAR, PedidoInvalido, ler_escolha, ler_pedido
 from tarefas import CANCELED, COMPLETED, FAILED, INPUT_REQUIRED, WORKING, Pendencia, Tarefa, Tarefas
 from traceparent import Trace, ler_traceparent
@@ -41,6 +41,7 @@ PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
 TASK_NOT_FOUND = -32001
 UNSUPPORTED_OPERATION = -32004
 
@@ -146,6 +147,14 @@ async def _retomar(tarefa: Tarefa, texto: str) -> None:
             input_responses={pendencia.chave: resposta},
             request_state=pendencia.request_state,
         )
+    except McpIndisponivel as e:
+        # A pergunta continua valida (o requestState nao depende do processo do MCP):
+        # a Task volta a pausar com a mesma pendencia e o cliente pode mandar a escolha de novo.
+        print(f"[agente] falha falando com o MCP: {e!r}", file=sys.stderr, flush=True)
+        tarefa.mudar(INPUT_REQUIRED, _linha_de_alternativas(pendencia.alternativas))
+        raise ErroRpc(
+            INTERNAL_ERROR, "Servidor MCP indisponivel: a Task continua aguardando a escolha; reenvie a mensagem"
+        ) from None
     except Exception as e:
         print(f"[agente] falha falando com o MCP: {e!r}", file=sys.stderr, flush=True)
         tarefa.pendencia = None
