@@ -66,8 +66,13 @@ def _linha_de_alternativas(alternativas: list[str]) -> str:
     return "alternativas: " + ", ".join(alternativas)
 
 
-def _aplicar(tarefa: Tarefa, desfecho: Desfecho, argumentos: dict[str, str], politica: str) -> None:
-    """Traduz o desfecho do tools/call em estado da Task."""
+def _aplicar(
+    tarefa: Tarefa, desfecho: Desfecho, argumentos: dict[str, str], politica: str, recusou: bool = False
+) -> None:
+    """Traduz o desfecho do tools/call em estado da Task.
+
+    CANCELED vem da recusa que o proprio agente enviou (decline), nao de um campo de dominio.
+    """
     if isinstance(desfecho, Pausado):
         _pausar(tarefa, desfecho, argumentos)
         return
@@ -75,9 +80,12 @@ def _aplicar(tarefa: Tarefa, desfecho: Desfecho, argumentos: dict[str, str], pol
     if isinstance(desfecho, Falhou):
         tarefa.mudar(FAILED, desfecho.mensagem)
         return
+    if recusou:
+        tarefa.mudar(CANCELED, "Reserva nao realizada: alternativas recusadas.")
+        return
     dados = desfecho.dados
     if not dados.get("reservado"):
-        tarefa.mudar(CANCELED, "Reserva nao realizada: alternativas recusadas.")
+        tarefa.mudar(FAILED, "O servidor MCP concluiu sem criar a reserva")
         return
     reserva = {
         "reserva": dados.get("reserva"),
@@ -160,7 +168,7 @@ async def _retomar(tarefa: Tarefa, texto: str) -> None:
         tarefa.pendencia = None
         tarefa.mudar(FAILED, "Servidor MCP indisponivel")
         return
-    _aplicar(tarefa, desfecho, pendencia.argumentos, tarefa.politica)
+    _aplicar(tarefa, desfecho, pendencia.argumentos, tarefa.politica, recusou=escolha == RECUSAR)
 
 
 async def send_message(params: dict[str, Any], trace: Trace | None) -> dict[str, Any]:
