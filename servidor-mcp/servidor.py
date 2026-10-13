@@ -36,7 +36,9 @@ PORTA = int(os.environ.get("MCP_PORT", "7301"))
 VALIDADE_DO_ESTADO = 600.0
 
 PERGUNTA = "A sala pedida esta ocupada nesse intervalo. Escolha uma alternativa."
-CHAVE_DA_ESCOLHA = "escolha_de_sala"
+# A chave do inputRequests e escolha do servidor. Esta e a mesma de exemplos/wire/03 e 04,
+# entao o retry do exemplo funciona trocando so o requestState.
+CHAVE_DA_ESCOLHA = "__main__:escolha_de_sala"
 
 
 def _segredo() -> str:

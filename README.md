@@ -78,6 +78,40 @@ curl -s -X POST http://localhost:7300/a2a -H 'Content-Type: application/json' -d
 # -> TASK_STATE_COMPLETED com o artifact "reserva"
 ```
 
+**Passos 11 a 13 do avaliador, direto no servidor MCP.** A chave do `inputRequests` é `__main__:escolha_de_sala`, a mesma de `exemplos/wire/03` e `04`, então o retry do exemplo 04 funciona trocando só o `requestState`. Os comandos abaixo guardam a resposta do conflito em `conflito.json` e montam o retry a partir dela, com a chave e a primeira alternativa que o servidor devolveu:
+
+```bash
+CABECALHOS=(-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'
+            -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H 'Mcp-Name: reservar_sala')
+
+# conflito (wire 03): input_required com a elicitation e o requestState
+python3 -c "import json; print(json.dumps(json.load(open('exemplos/wire/03-tools-call-conflito-input-required.json'))['request']['body']))" \
+  | curl -s -X POST http://localhost:7301/mcp "${CABECALHOS[@]}" -d @- | tee conflito.json
+
+# retry (wire 04) com o requestState recebido
+#   passo 11: rode com ADULTERAR=1 na frente do python3 -> um caractere trocado, -32602
+#   passo 12: reinicie o servidor MCP (mesmo REQUEST_STATE_SECRET) e rode sem ADULTERAR -> reserva concluída
+python3 - <<'PY' | curl -s -X POST http://localhost:7301/mcp "${CABECALHOS[@]}" -d @-
+import json, os
+conflito = json.load(open("conflito.json"))["result"]
+estado = conflito["requestState"]
+if os.environ.get("ADULTERAR"):
+    i = len(estado) // 2
+    estado = estado[:i] + ("A" if estado[i] != "A" else "B") + estado[i + 1:]
+chave, pedido = next(iter(conflito["inputRequests"].items()))
+sala = pedido["params"]["requestedSchema"]["properties"]["sala"]
+escolha = (sala.get("enum") or [sala.get("const")])[0]
+corpo = json.load(open("exemplos/wire/04-tools-call-retry.json"))["request"]["body"]
+corpo["params"]["requestState"] = estado
+corpo["params"]["inputResponses"] = {chave: {"action": "accept", "content": {"sala": escolha}}}
+print(json.dumps(corpo))
+PY
+
+# passo 13: o mesmo conflito sem declarar elicitation -> -32021 com HTTP 400
+python3 -c "import json; c = json.load(open('exemplos/wire/03-tools-call-conflito-input-required.json'))['request']['body']; c['params']['_meta']['io.modelcontextprotocol/clientCapabilities'] = {}; print(json.dumps(c))" \
+  | curl -s -i -X POST http://localhost:7301/mcp "${CABECALHOS[@]}" -d @-
+```
+
 ## Onde a ponte acontece
 
 1. **Entrada.** O pedido chega em `SendMessage` e o agente abre a Task. Antes do primeiro `tools/call`, ele descobre as tools com `tools/list` e lê a versão da política em `politica://uso`.

@@ -1,6 +1,7 @@
 import importlib
 import json
 import secrets
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,3 +40,9 @@ def test_retry_sem_resposta_de_cliente_com_form_recebe_a_pergunta_de_novo(servid
     resultado = servidor._retomar(retry(form))
     assert isinstance(resultado, InputRequiredResult)
     assert list(resultado.input_requests) == [servidor.CHAVE_DA_ESCOLHA]
+
+
+def test_chave_da_escolha_e_a_mesma_do_retry_de_exemplo(servidor):
+    exemplo = Path(__file__).resolve().parents[1] / "exemplos" / "wire" / "04-tools-call-retry.json"
+    corpo = json.loads(exemplo.read_text(encoding="utf-8"))["request"]["body"]
+    assert list(corpo["params"]["inputResponses"]) == [servidor.CHAVE_DA_ESCOLHA]
