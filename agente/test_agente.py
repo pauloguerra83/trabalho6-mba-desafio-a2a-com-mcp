@@ -1,6 +1,8 @@
 import asyncio
+import json
 
 import pytest
+from starlette.requests import Request
 
 import agente
 from host_mcp import Concluido, McpIndisponivel, Pausado
@@ -65,3 +67,30 @@ def test_complete_sem_reserva_e_sem_recusa_termina_failed():
     tarefa.mudar(WORKING)
     agente._aplicar(tarefa, Concluido({"reservado": False}), PEDIDO, "2026-11-01")
     assert tarefa.estado == FAILED
+
+
+def requisitar(corpo):
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(corpo).encode(), "more_body": False}
+
+    scope = {"type": "http", "method": "POST", "path": "/a2a", "headers": [(b"content-type", b"application/json")]}
+    return asyncio.run(agente.endpoint_a2a(Request(scope, receive)))
+
+
+def test_notificacao_jsonrpc_nao_recebe_resposta_e_nao_executa():
+    antes = len(agente.tarefas._por_id)
+    mensagem = {"messageId": "m-2", "role": "ROLE_USER", "parts": [{"text": "reservar sala=sala-porao"}]}
+    resposta = requisitar({"jsonrpc": "2.0", "method": "SendMessage", "params": {"message": mensagem}})
+    assert (resposta.status_code, resposta.body) == (204, b"")
+    assert len(agente.tarefas._por_id) == antes
+
+
+def test_erro_inesperado_vira_erro_jsonrpc_e_nao_http_500():
+    mensagem = {"messageId": "m-3", "role": "ROLE_USER", "parts": [{"text": "escolha=recusar"}], "taskId": ["nao-hashable"]}
+    resposta = requisitar({"jsonrpc": "2.0", "id": 7, "method": "SendMessage", "params": {"message": mensagem}})
+    assert resposta.status_code == 200
+    assert json.loads(resposta.body) == {"jsonrpc": "2.0", "id": 7, "error": {"code": -32603, "message": "Internal error"}}
+
+
+def test_text_que_nao_e_string_e_ignorado():
+    assert agente._texto_da_mensagem({"parts": [{"text": 123}, {"text": "escolha=recusar"}]}) == "escolha=recusar"

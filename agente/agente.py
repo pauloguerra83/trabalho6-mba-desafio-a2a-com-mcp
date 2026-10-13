@@ -14,13 +14,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from cartao import agent_card
@@ -58,7 +59,7 @@ class ErroRpc(Exception):
 
 def _texto_da_mensagem(mensagem: dict[str, Any]) -> str:
     partes = mensagem.get("parts") or []
-    return " ".join(p.get("text", "") for p in partes if isinstance(p, dict)).strip()
+    return " ".join(p["text"] for p in partes if isinstance(p, dict) and isinstance(p.get("text"), str)).strip()
 
 
 def _linha_de_alternativas(alternativas: list[str]) -> str:
@@ -218,13 +219,17 @@ def _erro(id_rpc: Any, codigo: int, mensagem: str) -> JSONResponse:
     return JSONResponse({"jsonrpc": "2.0", "id": id_rpc, "error": {"code": codigo, "message": mensagem}})
 
 
-async def endpoint_a2a(request: Request) -> JSONResponse:
+async def endpoint_a2a(request: Request) -> Response:
     try:
         corpo = json.loads(await request.body())
     except ValueError:
         return _erro(None, PARSE_ERROR, "Parse error")
     if not isinstance(corpo, dict) or corpo.get("jsonrpc") != "2.0" or not isinstance(corpo.get("method"), str):
         return _erro(corpo.get("id") if isinstance(corpo, dict) else None, INVALID_REQUEST, "Invalid Request")
+    if "id" not in corpo:
+        # Notificacao JSON-RPC: o servidor nao responde. A A2A so define requests, entao nada e executado.
+        print(f"[agente] a2a notificacao ignorada method={corpo['method']}", file=sys.stderr, flush=True)
+        return Response(status_code=204)
 
     id_rpc = corpo.get("id")
     metodo = METODOS.get(corpo["method"])
@@ -238,6 +243,9 @@ async def endpoint_a2a(request: Request) -> JSONResponse:
         resultado = await metodo(params, ler_traceparent(request.headers.get("traceparent")))
     except ErroRpc as e:
         return _erro(id_rpc, e.codigo, e.mensagem)
+    except Exception:
+        traceback.print_exc()
+        return _erro(id_rpc, INTERNAL_ERROR, "Internal error")
     return JSONResponse({"jsonrpc": "2.0", "id": id_rpc, "result": resultado})
 
 
