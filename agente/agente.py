@@ -14,17 +14,18 @@ from __future__ import annotations
 import json
 import os
 import sys
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from cartao import agent_card
-from host_mcp import Concluido, Desfecho, Falhou, HostMcp, Pausado
+from host_mcp import Concluido, Desfecho, Falhou, HostMcp, McpIndisponivel, Pausado
 from pedido import RECUSAR, PedidoInvalido, ler_escolha, ler_pedido
 from tarefas import CANCELED, COMPLETED, FAILED, INPUT_REQUIRED, WORKING, Pendencia, Tarefa, Tarefas
 from traceparent import Trace, ler_traceparent
@@ -41,6 +42,7 @@ PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
 TASK_NOT_FOUND = -32001
 UNSUPPORTED_OPERATION = -32004
 
@@ -57,7 +59,7 @@ class ErroRpc(Exception):
 
 def _texto_da_mensagem(mensagem: dict[str, Any]) -> str:
     partes = mensagem.get("parts") or []
-    return " ".join(p.get("text", "") for p in partes if isinstance(p, dict)).strip()
+    return " ".join(p["text"] for p in partes if isinstance(p, dict) and isinstance(p.get("text"), str)).strip()
 
 
 def _linha_de_alternativas(alternativas: list[str]) -> str:
@@ -65,8 +67,13 @@ def _linha_de_alternativas(alternativas: list[str]) -> str:
     return "alternativas: " + ", ".join(alternativas)
 
 
-def _aplicar(tarefa: Tarefa, desfecho: Desfecho, argumentos: dict[str, str], politica: str) -> None:
-    """Traduz o desfecho do tools/call em estado da Task."""
+def _aplicar(
+    tarefa: Tarefa, desfecho: Desfecho, argumentos: dict[str, str], politica: str, recusou: bool = False
+) -> None:
+    """Traduz o desfecho do tools/call em estado da Task.
+
+    CANCELED vem da recusa que o proprio agente enviou (decline), nao de um campo de dominio.
+    """
     if isinstance(desfecho, Pausado):
         _pausar(tarefa, desfecho, argumentos)
         return
@@ -74,9 +81,12 @@ def _aplicar(tarefa: Tarefa, desfecho: Desfecho, argumentos: dict[str, str], pol
     if isinstance(desfecho, Falhou):
         tarefa.mudar(FAILED, desfecho.mensagem)
         return
+    if recusou:
+        tarefa.mudar(CANCELED, "Reserva nao realizada: alternativas recusadas.")
+        return
     dados = desfecho.dados
     if not dados.get("reservado"):
-        tarefa.mudar(CANCELED, "Reserva nao realizada: alternativas recusadas.")
+        tarefa.mudar(FAILED, "O servidor MCP concluiu sem criar a reserva")
         return
     reserva = {
         "reserva": dados.get("reserva"),
@@ -146,12 +156,20 @@ async def _retomar(tarefa: Tarefa, texto: str) -> None:
             input_responses={pendencia.chave: resposta},
             request_state=pendencia.request_state,
         )
+    except McpIndisponivel as e:
+        # A pergunta continua valida (o requestState nao depende do processo do MCP):
+        # a Task volta a pausar com a mesma pendencia e o cliente pode mandar a escolha de novo.
+        print(f"[agente] falha falando com o MCP: {e!r}", file=sys.stderr, flush=True)
+        tarefa.mudar(INPUT_REQUIRED, _linha_de_alternativas(pendencia.alternativas))
+        raise ErroRpc(
+            INTERNAL_ERROR, "Servidor MCP indisponivel: a Task continua aguardando a escolha; reenvie a mensagem"
+        ) from None
     except Exception as e:
         print(f"[agente] falha falando com o MCP: {e!r}", file=sys.stderr, flush=True)
         tarefa.pendencia = None
         tarefa.mudar(FAILED, "Servidor MCP indisponivel")
         return
-    _aplicar(tarefa, desfecho, pendencia.argumentos, tarefa.politica)
+    _aplicar(tarefa, desfecho, pendencia.argumentos, tarefa.politica, recusou=escolha == RECUSAR)
 
 
 async def send_message(params: dict[str, Any], trace: Trace | None) -> dict[str, Any]:
@@ -201,13 +219,17 @@ def _erro(id_rpc: Any, codigo: int, mensagem: str) -> JSONResponse:
     return JSONResponse({"jsonrpc": "2.0", "id": id_rpc, "error": {"code": codigo, "message": mensagem}})
 
 
-async def endpoint_a2a(request: Request) -> JSONResponse:
+async def endpoint_a2a(request: Request) -> Response:
     try:
         corpo = json.loads(await request.body())
     except ValueError:
         return _erro(None, PARSE_ERROR, "Parse error")
     if not isinstance(corpo, dict) or corpo.get("jsonrpc") != "2.0" or not isinstance(corpo.get("method"), str):
         return _erro(corpo.get("id") if isinstance(corpo, dict) else None, INVALID_REQUEST, "Invalid Request")
+    if "id" not in corpo:
+        # Notificacao JSON-RPC: o servidor nao responde. A A2A so define requests, entao nada e executado.
+        print(f"[agente] a2a notificacao ignorada method={corpo['method']}", file=sys.stderr, flush=True)
+        return Response(status_code=204)
 
     id_rpc = corpo.get("id")
     metodo = METODOS.get(corpo["method"])
@@ -221,6 +243,9 @@ async def endpoint_a2a(request: Request) -> JSONResponse:
         resultado = await metodo(params, ler_traceparent(request.headers.get("traceparent")))
     except ErroRpc as e:
         return _erro(id_rpc, e.codigo, e.mensagem)
+    except Exception:
+        traceback.print_exc()
+        return _erro(id_rpc, INTERNAL_ERROR, "Internal error")
     return JSONResponse({"jsonrpc": "2.0", "id": id_rpc, "result": resultado})
 
 

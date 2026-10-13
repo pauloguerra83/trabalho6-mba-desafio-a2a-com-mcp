@@ -26,6 +26,7 @@ from mcp_types import (
 )
 
 from dominio import ERRO_SEM_ALTERNATIVA, CentralDeSalas, ErroDeRegra, Pedido
+from guarda_versao import GuardaDeVersao
 from log_requests import LogDeRequests
 from modelos import ConflitoOut, Disponibilidade, ListaDeSalas, ReservaOut, SalaOut, modelo_escolha
 
@@ -35,7 +36,9 @@ PORTA = int(os.environ.get("MCP_PORT", "7301"))
 VALIDADE_DO_ESTADO = 600.0
 
 PERGUNTA = "A sala pedida esta ocupada nesse intervalo. Escolha uma alternativa."
-CHAVE_DA_ESCOLHA = "escolha_de_sala"
+# A chave do inputRequests e escolha do servidor. Esta e a mesma de exemplos/wire/03 e 04,
+# entao o retry do exemplo funciona trocando so o requestState.
+CHAVE_DA_ESCOLHA = "__main__:escolha_de_sala"
 
 
 def _segredo() -> str:
@@ -134,6 +137,8 @@ def _retomar(ctx: Context) -> ReservaOut | InputRequiredResult:
 
     resposta = (ctx.input_responses or {}).get(CHAVE_DA_ESCOLHA)
     if resposta is None:
+        # Sem resposta a pergunta e refeita, e de novo so para quem declarou form mode.
+        _exigir_elicitation_form(ctx)
         return _pergunta(estado)
     acao = getattr(resposta, "action", None)
     if acao == "decline":
@@ -176,7 +181,8 @@ def politica_de_uso() -> str:
 def main() -> None:
     app = mcp.streamable_http_app(json_response=True, stateless_http=True, host=HOST)
     print(f"[mcp] central-de-salas em http://{HOST}:{PORTA}/mcp", file=sys.stderr, flush=True)
-    uvicorn.run(LogDeRequests(app), host=HOST, port=PORTA, log_level="warning")
+    # O log fica por fora, para registrar tambem o que a guarda de versao recusa.
+    uvicorn.run(LogDeRequests(GuardaDeVersao(app)), host=HOST, port=PORTA, log_level="warning")
 
 
 if __name__ == "__main__":
