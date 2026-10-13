@@ -17,6 +17,8 @@ Pré-requisito: Python 3.12 ou superior. Os comandos abaixo partem de um clone l
 
 No Windows, o venv só tem `python.exe`, e o `python3` do PATH costuma ser o atalho da Microsoft Store. Lá, use `python` (com o venv ativo) ou `py -3.12` no lugar de `python3` em todos os comandos deste README.
 
+**Sistema com Python anterior ao 3.12.** O `requirements.lock` foi gerado no 3.12 e trava pacotes que não instalam em versões anteriores: o `rpds-py==2026.9.1`, dependência indireta do SDK, exige 3.11. Se o `python3` do sistema for mais antigo (o Ubuntu 22.04 vem com 3.10), instale o 3.12 antes, pelo pyenv, pelo uv ou, no Ubuntu, pelos pacotes `python3.12` e `python3.12-venv` do PPA deadsnakes. Depois, crie o venv do passo 1 com ele: `python3.12 -m venv .venv`.
+
 **1. Ambiente e dependências** (uma vez só)
 
 ```bash
